@@ -21,7 +21,7 @@
   nav button.ativo{color:var(--pri);border-bottom-color:var(--pri)}
   main{max-width:1200px;margin:0 auto;padding:16px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
-  .filtros{display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:10px;align-items:end;margin-bottom:12px}
+  .filtros{display:grid;grid-template-columns:2fr 1.4fr 1fr 1fr 1fr auto;gap:10px;align-items:end;margin-bottom:12px}
   @media (max-width:760px){.filtros{grid-template-columns:1fr 1fr}.filtros .busca{grid-column:1/-1}}
   label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px}
   input,select{width:100%;padding:10px;font-size:15px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);font-family:inherit}
@@ -43,6 +43,14 @@
   .muted{color:var(--muted)}
   .vazio{text-align:center;color:var(--muted);padding:40px}
   .mais{display:block;margin:16px auto}
+  .mot{background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:10px}
+  .mot>summary{list-style:none;cursor:pointer;padding:12px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .mot>summary::-webkit-details-marker{display:none}
+  .mot>summary::before{content:'▸';color:var(--muted);transition:transform .15s}
+  .mot[open]>summary::before{transform:rotate(90deg)}
+  .mot .nome{font-weight:700;font-size:15px}
+  .mot .ult{color:var(--muted);font-size:13px;margin-left:auto}
+  .mot .corpo{padding:0 14px 14px}
   /* login */
   .login{max-width:380px;margin:60px auto;text-align:center}
   .login .logo{height:80px;margin-bottom:10px}
@@ -111,6 +119,7 @@
     <section id="aba-comp">
       <div class="card filtros">
         <div class="busca"><label>Buscar (NF/CT-e, motorista, placa, cliente, CPF)</label><input id="fBusca" type="search" placeholder="Digite para filtrar"></div>
+        <div><label>Motorista</label><select id="fMotorista"><option value="">Todos</option></select></div>
         <div><label>De</label><input id="fDe" type="date"></div>
         <div><label>Até</label><input id="fAte" type="date"></div>
         <div><label>Origem</label><select id="fOrigem"><option value="">Todas</option><option>App frota</option><option>Site terceiro</option></select></div>
@@ -305,6 +314,7 @@ function lerDAMDFE(paginas) {
   const diaISO = s => { const m = /(\d{2})\/(\d{2})\/(\d{4})/.exec(s || ''); return m ? `${m[3]}-${m[2]}-${m[1]}` : ''; };
 
   // ---------------- comprovantes ----------------
+  const normNome = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim() || 'SEM NOME';
   let entregas = [], filtradas = [], mostrando = 0;
   const POR_PAGINA = 48;
   const thumbCache = {};
@@ -315,31 +325,68 @@ function lerDAMDFE(paginas) {
     try {
       const j = await api('g_entregas');
       entregas = j.itens;
+      entregas.forEach(r => r.mot = normNome(r.motorista));
+      const sel = $('fMotorista'), atual = sel.value, cont = {};
+      entregas.forEach(r => cont[r.mot] = (cont[r.mot] || 0) + 1);
+      sel.replaceChildren(el('option', 'Todos', null));
+      sel.firstChild.value = '';
+      Object.keys(cont).sort().forEach(k => { const o = el('option', `${k} (${cont[k]})`); o.value = k; sel.append(o); });
+      sel.value = atual in cont ? atual : '';
       filtrar();
     } catch (e) { $('resumo').textContent = 'Erro: ' + e.message; }
   }
   function filtrar(){
-    const q = $('fBusca').value.trim().toLowerCase(), de = $('fDe').value, ate = $('fAte').value, org = $('fOrigem').value;
+    const q = $('fBusca').value.trim().toLowerCase(), de = $('fDe').value, ate = $('fAte').value, org = $('fOrigem').value, mot = $('fMotorista').value;
     filtradas = entregas.filter(r => {
       const d = diaISO(r.quando);
       if (de && d < de) return false;
       if (ate && d > ate) return false;
       if (org && r.origem !== org) return false;
+      if (mot && r.mot !== mot) return false;
       if (!q) return true;
       return [r.nf, r.motorista, r.placa, r.cliente, r.cpf, r.obs].some(v => String(v || '').toLowerCase().includes(q));
     });
-    mostrando = 0; $('grade').replaceChildren();
-    $('resumo').textContent = `${filtradas.length} comprovante(s)` + (filtradas.length !== entregas.length ? ` de ${entregas.length}` : '');
-    if (!filtradas.length) $('grade').append(el('div', 'Nenhum comprovante encontrado.', 'vazio'));
-    mostrarMais();
+    const grade = $('grade'); grade.replaceChildren();
+    grade.className = '';
+    $('mais').classList.add('hidden');
+    // agrupa por motorista (ordem alfabética)
+    const grupos = new Map();
+    filtradas.forEach(r => { if (!grupos.has(r.mot)) grupos.set(r.mot, []); grupos.get(r.mot).push(r); });
+    const nomes = [...grupos.keys()].sort();
+    $('resumo').textContent = `${filtradas.length} comprovante(s) de ${nomes.length} motorista(s)` + (filtradas.length !== entregas.length ? ` — filtrados de ${entregas.length}` : '');
+    if (!filtradas.length){ grade.append(el('div', 'Nenhum comprovante encontrado.', 'vazio')); return; }
+    const abrirTodos = nomes.length === 1 || !!q || !!mot;
+    nomes.forEach(nome => grade.append(grupoMotorista(nome, grupos.get(nome), abrirTodos)));
   }
-  function mostrarMais(){
-    const lote = filtradas.slice(mostrando, mostrando + POR_PAGINA);
-    mostrando += lote.length;
-    for (const r of lote) $('grade').append(cartao(r));
-    $('mais').classList.toggle('hidden', mostrando >= filtradas.length);
-    pedirThumbs(lote.map(r => r.foto).filter(Boolean));
+  function grupoMotorista(nome, itens, aberto){
+    const d = el('details', null, 'mot');
+    const s = el('summary');
+    const nFrota = itens.filter(r => r.origem !== 'Site terceiro').length, nTerc = itens.length - nFrota;
+    s.append(el('span', nome, 'nome'), el('span', `${itens.length} comprovante(s)`, 'chip ok'));
+    if (nFrota && nTerc) { s.append(el('span', `${nFrota} frota`, 'chip frota'), el('span', `${nTerc} terceiro`, 'chip terc')); }
+    else s.append(el('span', nTerc ? 'Terceiro' : 'Frota', 'chip ' + (nTerc ? 'terc' : 'frota')));
+    const baixa = itens.filter(r => /qualidade baixa/i.test(r.obs || '')).length;
+    if (baixa) s.append(el('span', `⚠ ${baixa} com qualidade baixa`, 'chip pend'));
+    s.append(el('span', 'Último: ' + itens[0].quando, 'ult'));
+    const corpo = el('div', null, 'corpo');
+    const gr = el('div', null, 'grade');
+    const mais = el('button', 'Mostrar mais', 'btn sec mais hidden');
+    corpo.append(gr, mais);
+    d.append(s, corpo);
+    let mostrados = 0;
+    const lote = () => {
+      const fatia = itens.slice(mostrados, mostrados + POR_PAGINA);
+      mostrados += fatia.length;
+      fatia.forEach(r => gr.append(cartao(r)));
+      mais.classList.toggle('hidden', mostrados >= itens.length);
+      pedirThumbs(fatia.map(r => r.foto).filter(Boolean));
+    };
+    mais.onclick = lote;
+    d.addEventListener('toggle', () => { if (d.open && !mostrados) lote(); });
+    if (aberto) { d.open = true; }
+    return d;
   }
+  function mostrarMais(){}
   function cartao(r){
     const b = el('button', null, 'item');
     const t = el('div', r.foto ? 'carregando…' : 'sem foto', 'thumb'); t.dataset.foto = r.foto || '';
@@ -378,7 +425,7 @@ function lerDAMDFE(paginas) {
     proximoLoteThumbs();
   }
   let tFiltro = null;
-  ['fBusca','fDe','fAte','fOrigem'].forEach(id => $(id).addEventListener('input', () => { clearTimeout(tFiltro); tFiltro = setTimeout(filtrar, 250); }));
+  ['fBusca','fDe','fAte','fOrigem','fMotorista'].forEach(id => $(id).addEventListener('input', () => { clearTimeout(tFiltro); tFiltro = setTimeout(filtrar, 250); }));
   $('mais').onclick = mostrarMais;
   $('recarregar').onclick = carregarEntregas;
 
